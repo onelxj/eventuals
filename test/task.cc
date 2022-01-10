@@ -370,11 +370,13 @@ TEST(Task, FromToStop) {
 
 TEST(Task, Success) {
   auto f = []() -> Task::Of<void> {
-    return Task::Success();
+    return []() {
+      return Just();
+    };
   };
 
-  auto g = []() -> Task::Of<std::string> {
-    return Task::Success("hello");
+  auto g = []() -> Task::Of<eventuals::events::SuccessEvent<std::string>> {
+    return Task::Success(std::string("hello"));
   };
 
   auto e = [&]() {
