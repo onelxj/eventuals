@@ -154,6 +154,34 @@ struct _TaskFailure {
   _TaskFailure() = delete;
 };
 
+// Type used to identify when using a 'Task::Success()' and in
+// 'Task::Success()' order to properly type-check with 'static_assert()'.
+namespace events {
+struct Success {
+  Success() = delete;
+};
+
+template <typename Error>
+struct Failure {
+  Failure() = delete;
+};
+
+template <typename Failure_>
+struct FailureWrapper {
+  using Type = Failure_;
+  FailureWrapper() = delete;
+};
+
+template <typename Failure_>
+struct FailureWrapper<Failure<Failure_>> {
+  using Type = Failure_;
+  FailureWrapper() = delete;
+};
+
+struct EmptyStruct {};
+
+} // namespace events
+
 ////////////////////////////////////////////////////////////////////////
 
 struct _TaskFromToWith {
@@ -166,18 +194,56 @@ struct _TaskFromToWith {
     Fail = 2,
   };
 
-  template <typename K_, typename From_, typename To_, typename... Args_>
+  template <
+      typename K_,
+      typename From_,
+      typename To_,
+      typename Event_ = void,
+      typename... Args_>
   struct Continuation {
     template <typename... From>
     void Start(From&&... from) {
-      if constexpr (std::is_void_v<From_>) {
-        Dispatch(Action::Start, std::monostate{});
-      } else {
+      if constexpr (std::is_same_v<Event_, events::Success>) {
         static_assert(
-            sizeof...(from) > 0,
-            "Expecting \"from\" argument for 'Task<From, To>' "
-            "but no argument passed");
-        Dispatch(Action::Start, std::forward<From>(from)...);
+            std::is_same_v<
+                std::decay_t<decltype(std::get<0>(dispatch_))>,
+                To_>);
+
+        if (std::holds_alternative<To_>(dispatch_)) {
+          k_.Start(std::move(std::get<0>(dispatch_)));
+        } else {
+          if constexpr (std::is_void_v<From_>) {
+            Dispatch(Action::Start, std::monostate{});
+          } else {
+            static_assert(
+                sizeof...(from) > 0,
+                "Expecting \"from\" argument for 'Task<From, To>' "
+                "but no argument passed");
+            Dispatch(Action::Start, std::forward<From>(from)...);
+          }
+        }
+      } else if constexpr (
+          std::is_same_v<
+              Event_,
+              events::Failure<
+                  typename events::FailureWrapper<Event_>::Type>>) {
+        CHECK(
+            std::holds_alternative<
+                typename events::FailureWrapper<Event_>::Type>(dispatch_));
+
+        auto exception = std::make_exception_ptr(
+            std::move(std::get<1>(dispatch_)));
+        k_.Fail(std::move(exception));
+      } else {
+        if constexpr (std::is_void_v<From_>) {
+          Dispatch(Action::Start, std::monostate{});
+        } else {
+          static_assert(
+              sizeof...(from) > 0,
+              "Expecting \"from\" argument for 'Task<From, To>' "
+              "but no argument passed");
+          Dispatch(Action::Start, std::forward<From>(from)...);
+        }
       }
     }
 
@@ -215,7 +281,7 @@ struct _TaskFromToWith {
         std::optional<std::exception_ptr>&& exception = std::nullopt) {
       std::apply(
           [&](auto&&... args) {
-            dispatch_(
+            std::get<2>(dispatch_)(
                 action,
                 std::move(exception),
                 std::forward<decltype(args)>(args)...,
@@ -238,33 +304,64 @@ struct _TaskFromToWith {
     K_ k_;
     std::tuple<Args_...> args_;
 
-    Callback<
-        Action,
-        std::optional<std::exception_ptr>&&,
-        Args_&&...,
-        std::optional<
-            std::conditional_t<
-                std::is_void_v<From_>,
-                std::monostate,
-                From_>>&&,
-        std::unique_ptr<void, Callback<void*>>&,
-        Interrupt&,
+    std::variant<
         std::conditional_t<
             std::is_void_v<To_>,
-            Callback<>&&,
-            Callback<To_>&&>,
-        Callback<std::exception_ptr>&&,
-        Callback<>&&>
+            std::monostate,
+            std::decay_t<To_>>,
+        std::conditional_t<
+            std::is_void_v<Event_>,
+            std::monostate,
+            std::decay_t<typename events::FailureWrapper<Event_>::Type>>,
+        Callback<
+            Action,
+            std::optional<std::exception_ptr>&&,
+            Args_&&...,
+            // Can't have a 'void' argument type
+            // so we are using 'std::monostate'.
+            std::optional<
+                std::conditional_t<
+                    std::is_void_v<From_>,
+                    std::monostate,
+                    From_>>&&,
+            std::unique_ptr<void, Callback<void*>>&,
+            Interrupt&,
+            std::conditional_t<
+                std::is_void_v<To_>,
+                Callback<>&&,
+                Callback<To_>&&>,
+            Callback<std::exception_ptr>&&,
+            Callback<>&&>>
         dispatch_;
 
     std::unique_ptr<void, Callback<void*>> e_;
     Interrupt* interrupt_ = nullptr;
   };
 
-  template <typename From_, typename To_, typename... Args_>
+  template <
+      typename From_,
+      typename To_,
+      typename Event_ = void,
+      typename... Args_>
   struct Composable {
     template <typename>
     using ValueFrom = To_;
+
+    Composable(
+        std::conditional_t<
+            std::is_void_v<To_>,
+            std::monostate,
+            To_> value)
+      : dispatch_(std::move(value)) {}
+
+    Composable(
+        std::conditional_t<
+            std::is_void_v<Event_>,
+            events::EmptyStruct,
+            std::decay_t<
+                typename events::FailureWrapper<Event_>::Type>> value,
+        bool)
+      : dispatch_(std::move(value)) {}
 
     template <typename F>
     Composable(Args_... args, F f)
@@ -354,31 +451,42 @@ struct _TaskFromToWith {
 
     template <typename Arg, typename K>
     auto k(K k) && {
-      return Continuation<K, From_, To_, Args_...>{
+      return Continuation<K, From_, To_, Event_, Args_...>{
           std::move(k),
           std::move(args_),
           std::move(dispatch_)};
     }
 
-    Callback<
-        Action,
-        std::optional<std::exception_ptr>&&,
-        Args_&&...,
-        // Can't have a 'void' argument type so we are using 'std::monostate'.
-        std::optional<
-            std::conditional_t<
-                std::is_void_v<From_>,
-                std::monostate,
-                From_>>&&,
-        std::unique_ptr<void, Callback<void*>>&,
-        Interrupt&,
+    std::variant<
         std::conditional_t<
             std::is_void_v<To_>,
-            Callback<>&&,
-            Callback<To_>&&>,
-        Callback<std::exception_ptr>&&,
-        Callback<>&&>
+            std::monostate,
+            std::decay_t<To_>>,
+        std::conditional_t<
+            std::is_void_v<Event_>,
+            std::monostate,
+            std::decay_t<typename events::FailureWrapper<Event_>::Type>>,
+        Callback<
+            Action,
+            std::optional<std::exception_ptr>&&,
+            Args_&&...,
+            // Can't have a 'void' argument type
+            // so we are using 'std::monostate'.
+            std::optional<
+                std::conditional_t<
+                    std::is_void_v<From_>,
+                    std::monostate,
+                    From_>>&&,
+            std::unique_ptr<void, Callback<void*>>&,
+            Interrupt&,
+            std::conditional_t<
+                std::is_void_v<To_>,
+                Callback<>&&,
+                Callback<To_>&&>,
+            Callback<std::exception_ptr>&&,
+            Callback<>&&>>
         dispatch_;
+
     std::tuple<Args_...> args_;
   };
 };
@@ -389,11 +497,33 @@ struct _TaskFromToWith {
 // started via 'TaskFromToWith::Start()'. If used as a continuation
 // then it can't be moved after starting, just like all other
 // continuations.
-template <typename From_, typename To_, typename... Args_>
+template <
+    typename From_,
+    typename To_,
+    typename Event_ = void,
+    typename... Args_>
 class TaskFromToWith {
  public:
   template <typename Arg>
   using ValueFrom = To_;
+
+  TaskFromToWith(
+      std::conditional_t<
+          std::is_void_v<To_>,
+          std::monostate,
+          To_> value)
+    : e_(std::move(value)) {}
+
+  TaskFromToWith(
+      std::conditional_t<
+          std::is_void_v<Event_>,
+          events::EmptyStruct,
+          std::decay_t<
+              typename events::FailureWrapper<Event_>::Type>> value,
+      // to avoid multiple overloads when To and Event_::Type are equal
+      // to the same type
+      bool failure)
+    : e_(std::move(value), failure) {}
 
   template <typename F>
   TaskFromToWith(Args_... args, F f)
@@ -481,7 +611,7 @@ class TaskFromToWith {
   }
 
  private:
-  _TaskFromToWith::Composable<From_, To_, Args_...> e_;
+  _TaskFromToWith::Composable<From_, To_, Event_, Args_...> e_;
 
   // NOTE: if 'Task::Start()' is invoked then 'Task' becomes not just
   // a composable but also a continuation which has a terminal made up
@@ -508,15 +638,23 @@ struct Task {
     template <typename To_>
     struct To : public TaskFromToWith<From_, To_> {
       template <typename... Args_>
-      using With = TaskFromToWith<From_, To_, Args_...>;
+      using With = TaskFromToWith<From_, To_, void, Args_...>;
+
+      using Success = TaskFromToWith<From_, To_, events::Success>;
+
+      template <typename Error>
+      using Failure = TaskFromToWith<From_, To_, events::Failure<Error>>;
 
       template <typename F>
       To(F f)
         : TaskFromToWith<From_, To_>(std::move(f)) {}
+
+      To(std::conditional_t<std::is_void_v<To_>, std::monostate, To_> value)
+        : TaskFromToWith<From_, To_>(std::move(value)) {}
     };
 
     template <typename... Args_>
-    using With = TaskFromToWith<From_, void, Args_...>;
+    using With = TaskFromToWith<From_, void, void, Args_...>;
 
     template <typename F>
     From(F f)
@@ -533,9 +671,11 @@ struct Task {
   template <typename Value>
   static auto Success(Value value) {
     // TODO(benh): optimize away heap allocation.
-    return [value = std::make_unique<Value>(std::move(value))]() mutable {
-      return Just(Value(std::move(*value)));
-    };
+
+    // return [value = std::make_unique<Value>(std::move(value))]() mutable {
+    //   return Just(Value(std::move(*value)));
+    // };
+    return TaskFromToWith<void, Value, events::Success>(std::move(value));
   }
 
   static auto Success() {
@@ -544,15 +684,19 @@ struct Task {
     };
   }
 
-  template <typename Error>
+  template <typename To, typename Error>
   static auto Failure(Error error) {
     // TODO(benh): optimize away heap allocation.
-    return [error = std::make_unique<Error>(std::move(error))]() mutable {
-      return Eventual<_TaskFailure>()
-          .start([&](auto& k) mutable {
-            k.Fail(Error(std::move(*error)));
-          });
-    };
+    return TaskFromToWith<
+        void,
+        To,
+        events::Failure<Error>>(std::move(error), true);
+    // return [error = std::make_unique<Error>(std::move(error))]() mutable {
+    //   return Eventual<_TaskFailure>()
+    //       .start([&](auto& k) mutable {
+    //         k.Fail(Error(std::move(*error)));
+    //       });
+    // };
   }
 };
 

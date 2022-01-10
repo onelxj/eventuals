@@ -369,25 +369,43 @@ TEST(Task, FromToStop) {
 }
 
 TEST(Task, Success) {
+  struct Base {
+    virtual Task::Of<std::string>::Success GetSuccessTask() = 0;
+  };
+
+  struct Async : public Base {
+    Task::Of<std::string>::Success GetSuccessTask() override {
+      return []() { return Just("hello"); };
+    }
+  };
+
+  struct Sync : public Base {
+    Task::Of<std::string>::Success GetSuccessTask() override {
+      return Task::Success(std::string("hello"));
+    }
+  };
+
   auto f = []() -> Task::Of<void> {
     return Task::Success();
   };
 
-  auto g = []() -> Task::Of<std::string> {
-    return Task::Success("hello");
-  };
-
-  auto e = [&]() {
+  auto async = [&]() {
     return f()
-        | g();
+        | Async().GetSuccessTask();
   };
 
-  EXPECT_EQ("hello", *e());
+  auto sync = [&]() {
+    return f()
+        | Sync().GetSuccessTask();
+  };
+
+  EXPECT_EQ("hello", *async());
+  EXPECT_EQ("hello", *sync());
 }
 
 TEST(Task, Failure) {
-  auto e = []() -> Task::Of<std::string> {
-    return Task::Failure("error");
+  auto e = []() -> Task::Of<int>::Failure<std::string> {
+    return Task::Failure<int>(std::string("error"));
   };
 
   EXPECT_THROW(*e(), std::exception_ptr);
