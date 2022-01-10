@@ -306,13 +306,23 @@ struct _TaskFromToWith {
 
     std::variant<
         std::conditional_t<
-            std::is_void_v<To_>,
-            std::monostate,
-            std::decay_t<To_>>,
-        std::conditional_t<
-            std::is_void_v<Event_>,
-            std::monostate,
-            std::decay_t<typename events::FailureWrapper<Event_>::Type>>,
+            std::is_same_v<
+                std::decay_t<To_>,
+                std::decay_t<typename events::FailureWrapper<Event_>::Type>>,
+            std::conditional_t<
+                std::is_void_v<To_>,
+                std::monostate,
+                std::decay_t<To_>>,
+            std::variant<
+                std::conditional_t<
+                    std::is_void_v<To_>,
+                    std::monostate,
+                    std::decay_t<To_>>,
+                std::conditional_t<
+                    std::is_void_v<Event_>,
+                    std::monostate,
+                    std::decay_t<
+                        typename events::FailureWrapper<Event_>::Type>>>>,
         Callback<
             Action,
             std::optional<std::exception_ptr>&&,
