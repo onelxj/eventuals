@@ -1,6 +1,5 @@
 #pragma once
 
-#include <iostream>
 #include <variant>
 
 #include "eventuals/eventual.h"
@@ -170,7 +169,7 @@ class _Expected {
 // return types to properly construct the correct type.
 struct Expected final {
   template <typename Value>
-  struct Of : public _Expected<Value> {
+  struct Of final : public _Expected<Value> {
     template <typename... Errors>
     using Raises = _Expected<Value, std::tuple<Errors...>>;
 

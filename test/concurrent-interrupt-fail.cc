@@ -33,8 +33,8 @@ TYPED_TEST(ConcurrentTypedTest, InterruptFail) {
         | this->ConcurrentOrConcurrentOrdered([&]() {
             return Map(Let([&](int& i) {
               return Eventual<std::string>()
-                  .interruptible()
                   .raises<std::runtime_error>()
+                  .interruptible()
                   .start([&](auto& k, Interrupt::Handler& handler) mutable {
                     handler.Install([&k]() {
                       k.Fail(std::runtime_error("error"));
