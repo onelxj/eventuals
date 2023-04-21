@@ -602,76 +602,80 @@ struct _Wait final {
 
     template <typename... Args>
     void Start(Args&&... args) {
-      CHECK(!lock_->Available()) << "expecting lock to be acquired";
+      if (handler_.has_value() && !handler_->Install()) {
+        k_.Stop();
+      } else {
+        CHECK(!lock_->Available()) << "expecting lock to be acquired";
 
-      notifiable_ = false;
+        notifiable_ = false;
 
-      if (!condition_) {
-        condition_.emplace(
-            // TODO(benh): borrow 'this'!
-            f_(Callback<void()>([this]() {
-              // NOTE: we ignore notifications unless we're notifiable
-              // and we make sure we're not notifiable after the first
-              // notification so we don't try and add ourselves to the
-              // list of waiters again.
-              if (notifiable_) {
-                CHECK(lock_->OwnedByCurrentSchedulerContext());
+        if (!condition_) {
+          condition_.emplace(
+              // TODO(benh): borrow 'this'!
+              f_(Callback<void()>([this]() {
+                // NOTE: we ignore notifications unless we're notifiable
+                // and we make sure we're not notifiable after the first
+                // notification so we don't try and add ourselves to the
+                // list of waiters again.
+                if (notifiable_) {
+                  CHECK(lock_->OwnedByCurrentSchedulerContext());
 
-                CHECK(waiter_.context);
+                  CHECK(waiter_.context);
 
-                EVENTUALS_LOG(2)
-                    << "'" << waiter_.context->name() << "' notified";
+                  EVENTUALS_LOG(2)
+                      << "'" << waiter_.context->name() << "' notified";
 
-                notifiable_ = false;
-                waiting_ = true;
+                  notifiable_ = false;
+                  waiting_ = true;
 
-                bool acquired = lock_->AcquireSlow(&waiter_);
+                  bool acquired = lock_->AcquireSlow(&waiter_);
 
-                CHECK(!acquired) << "lock should be held when notifying";
-              }
-            })));
-      }
-
-      if ((*condition_)(std::forward<Args>(args)...)) {
-        CHECK(!notifiable_) << "recursive wait detected (without notify)";
-
-        notifiable_ = true;
-
-        static_assert(
-            sizeof...(args) == 0 || sizeof...(args) == 1,
-            "Wait only supports 0 or 1 argument, but found > 1");
-
-        static_assert(std::is_void_v<Arg_> || sizeof...(args) == 1);
-
-        if constexpr (!std::is_void_v<Arg_>) {
-          arg_.emplace(std::forward<Args>(args)...);
+                  CHECK(!acquired) << "lock should be held when notifying";
+                }
+              })));
         }
 
-        waiter_.context = Scheduler::Context::Get();
+        if ((*condition_)(std::forward<Args>(args)...)) {
+          CHECK(!notifiable_) << "recursive wait detected (without notify)";
 
-        waiter_.f = [this]() mutable {
-          waiting_ = false;
+          notifiable_ = true;
 
-          EVENTUALS_LOG(2)
-              << "'" << waiter_.context->name() << "' (notify) acquired";
+          static_assert(
+              sizeof...(args) == 0 || sizeof...(args) == 1,
+              "Wait only supports 0 or 1 argument, but found > 1");
 
-          waiter_.context->Unblock([this]() mutable {
-            // NOTE: need to relinquish borrow of context to avoid
-            // this continuation causing a deadlock when trying to
-            // destruct the context.
-            waiter_.context.relinquish();
+          static_assert(std::is_void_v<Arg_> || sizeof...(args) == 1);
 
-            if constexpr (sizeof...(args) == 1) {
-              Start(std::move(*arg_));
-            } else {
-              Start();
-            }
-          });
-        };
+          if constexpr (!std::is_void_v<Arg_>) {
+            arg_.emplace(std::forward<Args>(args)...);
+          }
 
-        lock_->Release();
-      } else {
-        k_.Start(std::forward<Args>(args)...);
+          waiter_.context = Scheduler::Context::Get();
+
+          waiter_.f = [this]() mutable {
+            waiting_ = false;
+
+            EVENTUALS_LOG(2)
+                << "'" << waiter_.context->name() << "' (notify) acquired";
+
+            waiter_.context->Unblock([this]() mutable {
+              // NOTE: need to relinquish borrow of context to avoid
+              // this continuation causing a deadlock when trying to
+              // destruct the context.
+              waiter_.context.relinquish();
+
+              if constexpr (sizeof...(args) == 1) {
+                Start(std::move(*arg_));
+              } else {
+                Start();
+              }
+            });
+          };
+
+          lock_->Release();
+        } else {
+          k_.Start(std::forward<Args>(args)...);
+        }
       }
     }
 
@@ -690,77 +694,81 @@ struct _Wait final {
 
     template <typename... Args>
     void Body(Args&&... args) {
-      CHECK(!lock_->Available()) << "expecting lock to be acquired";
+      if (handler_.has_value() && !handler_->Install()) {
+        k_.Stop();
+      } else {
+        CHECK(!lock_->Available()) << "expecting lock to be acquired";
 
-      notifiable_ = false;
+        notifiable_ = false;
 
-      if (!condition_) {
-        condition_.emplace(
-            f_(Callback<void()>([this]() {
-              // NOTE: we ignore notifications unless we're notifiable
-              // and we make sure we're not notifiable after the first
-              // notification so we don't try and add ourselves to the
-              // list of waiters again.
-              //
-              // TODO(benh): make sure *we've* acquired the lock
-              // (where 'we' is the current "eventual").
-              if (notifiable_) {
-                CHECK(!lock_->Available());
+        if (!condition_) {
+          condition_.emplace(
+              f_(Callback<void()>([this]() {
+                // NOTE: we ignore notifications unless we're notifiable
+                // and we make sure we're not notifiable after the first
+                // notification so we don't try and add ourselves to the
+                // list of waiters again.
+                //
+                // TODO(benh): make sure *we've* acquired the lock
+                // (where 'we' is the current "eventual").
+                if (notifiable_) {
+                  CHECK(!lock_->Available());
 
-                CHECK(waiter_.context);
+                  CHECK(waiter_.context);
 
-                EVENTUALS_LOG(2)
-                    << "'" << waiter_.context->name() << "' notified";
+                  EVENTUALS_LOG(2)
+                      << "'" << waiter_.context->name() << "' notified";
 
-                notifiable_ = false;
+                  notifiable_ = false;
 
-                bool acquired = lock_->AcquireSlow(&waiter_);
+                  bool acquired = lock_->AcquireSlow(&waiter_);
 
-                CHECK(!acquired) << "lock should be held when notifying";
-              }
-            })));
-      }
-
-      if ((*condition_)(std::forward<Args>(args)...)) {
-        CHECK(!notifiable_) << "recursive wait detected (without notify)";
-
-        notifiable_ = true;
-
-        static_assert(
-            sizeof...(args) == 0 || sizeof...(args) == 1,
-            "Wait only supports 0 or 1 argument, but found > 1");
-
-        static_assert(std::is_void_v<Arg_> || sizeof...(args) == 1);
-
-        if constexpr (!std::is_void_v<Arg_>) {
-          arg_.emplace(std::forward<Args>(args)...);
+                  CHECK(!acquired) << "lock should be held when notifying";
+                }
+              })));
         }
 
-        waiter_.context = Scheduler::Context::Get();
+        if ((*condition_)(std::forward<Args>(args)...)) {
+          CHECK(!notifiable_) << "recursive wait detected (without notify)";
 
-        waiter_.f = [this]() mutable {
-          waiting_ = false;
+          notifiable_ = true;
 
-          EVENTUALS_LOG(2)
-              << "'" << waiter_.context->name() << "' (notify) acquired";
+          static_assert(
+              sizeof...(args) == 0 || sizeof...(args) == 1,
+              "Wait only supports 0 or 1 argument, but found > 1");
 
-          waiter_.context->Unblock([this]() mutable {
-            // NOTE: need to relinquish borrow of context to avoid
-            // this continuation causing a deadlock when trying to
-            // destruct the context.
-            waiter_.context.relinquish();
+          static_assert(std::is_void_v<Arg_> || sizeof...(args) == 1);
 
-            if constexpr (sizeof...(args) == 1) {
-              Body(std::move(*arg_));
-            } else {
-              Body();
-            }
-          });
-        };
+          if constexpr (!std::is_void_v<Arg_>) {
+            arg_.emplace(std::forward<Args>(args)...);
+          }
 
-        lock_->Release();
-      } else {
-        k_.Body(std::forward<Args>(args)...);
+          waiter_.context = Scheduler::Context::Get();
+
+          waiter_.f = [this]() mutable {
+            waiting_ = false;
+
+            EVENTUALS_LOG(2)
+                << "'" << waiter_.context->name() << "' (notify) acquired";
+
+            waiter_.context->Unblock([this]() mutable {
+              // NOTE: need to relinquish borrow of context to avoid
+              // this continuation causing a deadlock when trying to
+              // destruct the context.
+              waiter_.context.relinquish();
+
+              if constexpr (sizeof...(args) == 1) {
+                Body(std::move(*arg_));
+              } else {
+                Body();
+              }
+            });
+          };
+
+          lock_->Release();
+        } else {
+          k_.Body(std::forward<Args>(args)...);
+        }
       }
     }
 
@@ -774,6 +782,13 @@ struct _Wait final {
 
     void Register(Interrupt& interrupt) {
       k_.Register(interrupt);
+
+      handler_.emplace(&interrupt, [this]() {
+        if (!lock_->Available()) {
+          lock_->Release();
+          k_.Stop();
+        }
+      });
     }
 
     Lock* lock_;
@@ -786,6 +801,8 @@ struct _Wait final {
         arg_;
     bool notifiable_ = false;
     bool waiting_ = false;
+
+    std::optional<Interrupt::Handler> handler_ = std::nullopt;
 
     // NOTE: we store 'k_' as the _last_ member so it will be
     // destructed _first_ and thus we won't have any use-after-delete

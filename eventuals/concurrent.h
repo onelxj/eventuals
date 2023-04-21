@@ -1,5 +1,7 @@
 #pragma once
 
+#include <gtest/gtest.h>
+
 #include <deque>
 #include <mutex>
 #include <optional>
@@ -373,10 +375,8 @@ struct _Concurrent final {
                        always_false_v<decltype(unreachable)>,
                        "Unreachable");
                  })
-                 .stop([](auto&& unreachable) {
-                   static_assert(
-                       always_false_v<decltype(unreachable)>,
-                       "Unreachable");
+                 .stop([]() {
+                   FAIL() << "Unreachable";
                  });
     }
 
