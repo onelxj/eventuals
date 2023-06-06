@@ -391,10 +391,12 @@ struct _Concurrent final {
                        always_false_v<decltype(unreachable)>,
                        "Unreachable");
                  })
-                 .stop([](auto&& unreachable) {
-                   static_assert(
-                       always_false_v<decltype(unreachable)>,
-                       "Unreachable");
+                 .stop([](auto&&... unreachable) {
+                   if constexpr (sizeof...(unreachable)) {
+                     static_assert(
+                         always_false_v<decltype(unreachable)...>,
+                         "Unreachable");
+                   }
                  });
     }
 

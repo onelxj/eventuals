@@ -614,7 +614,31 @@ struct _Wait final {
               // and we make sure we're not notifiable after the first
               // notification so we don't try and add ourselves to the
               // list of waiters again.
-              if (notifiable_) {
+              if (handler_ && !handler_->Install()) {
+                // Has already been triggered.
+                // CHECK(false);
+                // k_.Stop();
+                // waiter_.context = Scheduler::Context::Get();
+
+                waiter_.f = [this]() mutable {
+                  waiting_ = false;
+
+                  EVENTUALS_LOG(2)
+                      << "'" << waiter_.context->name() << "' (notify) acquired";
+
+
+                  // waiter_.context->Unblock([this]() mutable {
+                  //   // NOTE: need to relinquish borrow of context to avoid
+                  //   // this continuation causing a deadlock when trying to
+                  //   // destruct the context.
+                  //   waiter_.context.relinquish();
+
+                  //   Stop();
+                  // });
+                };
+
+                lock_->Release();
+              } else if (notifiable_) {
                 CHECK(lock_->OwnedByCurrentSchedulerContext());
 
                 CHECK(waiter_.context);
@@ -704,7 +728,10 @@ struct _Wait final {
               //
               // TODO(benh): make sure *we've* acquired the lock
               // (where 'we' is the current "eventual").
-              if (notifiable_) {
+              if (handler_ && !handler_->Install()) {
+                // Has already been triggered.
+                // CHECK(false);
+              } else if (notifiable_) {
                 CHECK(!lock_->Available());
 
                 CHECK(waiter_.context);
@@ -774,11 +801,18 @@ struct _Wait final {
 
     void Register(Interrupt& interrupt) {
       k_.Register(interrupt);
+      handler_.emplace(
+          &interrupt,
+          [this]() {
+            lock_->Release();
+            k_.Stop();
+          });
     }
 
     Lock* lock_;
     F_ f_;
 
+    std::optional<Interrupt::Handler> handler_;
     std::optional<decltype(f_(std::declval<Callback<void()>>()))> condition_;
     Lock::Waiter waiter_;
     std::optional<
