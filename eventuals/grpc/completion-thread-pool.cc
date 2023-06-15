@@ -22,8 +22,7 @@ TestingCompletionThreadPool::TestingCompletionThreadPool()
               paused_ = false;
             }
           } while (!shutdown_);
-        },
-        "grpc comp. q.") {}
+        }) {}
 
 ////////////////////////////////////////////////////////////////////////
 
@@ -73,7 +72,7 @@ TestingCompletionThreadPool::ServerCompletionThreadPool() {
 ////////////////////////////////////////////////////////////////////////
 
 bool TestingCompletionThreadPool::RunUntilIdle() {
-  if (!thread_.is_current_thread()) {
+  if (std::this_thread::get_id() != thread_.get_id()) {
     CHECK(paused_) << "need to 'Pause()' the thread pool first!";
   }
 

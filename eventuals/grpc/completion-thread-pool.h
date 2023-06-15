@@ -79,7 +79,7 @@ class StaticCompletionThreadPool
 
   void Wait() {
     while (!threads_.empty()) {
-      os::Thread& thread = threads_.back();
+      std::thread& thread = threads_.back();
 
       thread.join();
 
@@ -116,8 +116,7 @@ class StaticCompletionThreadPool
             while (cq->Next(&tag, &ok)) {
               (*static_cast<Callback<void(bool)>*>(tag))(ok);
             }
-          },
-          "grpc comp. q.");
+          });
     }
   }
 
@@ -150,7 +149,7 @@ class StaticCompletionThreadPool
 
   size_t number_of_threads_per_completion_queue_ = 1;
 
-  std::vector<os::Thread> threads_;
+  std::vector<std::thread> threads_;
 
   bool scheduling_ = false;
   bool shutdown_ = false;
@@ -316,7 +315,7 @@ class TestingCompletionThreadPool {
   std::atomic<bool> pause_ = false;
   std::atomic<bool> paused_ = false;
   std::atomic<bool> shutdown_ = false;
-  os::Thread thread_;
+  std::thread thread_;
 };
 
 ////////////////////////////////////////////////////////////////////////
